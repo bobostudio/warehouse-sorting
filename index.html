@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>仓库分拣仿真</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-top: #08111c;
+      --bg-bottom: #12263a;
+      --panel: rgba(10, 18, 28, 0.78);
+      --panel-border: rgba(128, 197, 255, 0.18);
+      --text: #e6f3ff;
+      --muted: #8aa7bf;
+      --accent: #79d6ff;
+      --warning: #ffc75d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(74, 137, 220, 0.2), transparent 38%),
+        linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+      color: var(--text);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: fixed;
+      inset: 20px auto auto 20px;
+      width: min(360px, calc(100vw - 40px));
+      padding: 18px 18px 16px;
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(17, 31, 47, 0.9), rgba(6, 12, 20, 0.76));
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+      backdrop-filter: blur(14px);
+      pointer-events: none;
+    }
+
+    .hud h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    .hud p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .status-card {
+      padding: 10px 12px;
+      border: 1px solid rgba(121, 214, 255, 0.12);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .status-card strong {
+      display: block;
+      font-size: 22px;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .status-card span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .phase-bar {
+      margin-top: 16px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .phase-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #5de0a0, #79d6ff 65%, #ffc75d);
+      box-shadow: 0 0 20px rgba(121, 214, 255, 0.45);
+      transition: width 120ms linear;
+    }
+
+    .phase-text {
+      margin-top: 10px;
+      font-size: 14px;
+      color: var(--warning);
+      letter-spacing: 0.02em;
+    }
+
+    .legend {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+    }
+
+    .legend h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: var(--accent);
+      letter-spacing: 0.08em;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      flex: 0 0 auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <h1>仓库分拣仿真</h1>
+    <p>Three.js 单文件演示: 传送带输送包裹，机械臂按目标箱位完成抓取、搬运与放置。</p>
+    <div class="status-grid">
+      <div class="status-card">
+        <strong id="processedCount">0</strong>
+        <span>已处理包裹</span>
+      </div>
+      <div class="status-card">
+        <strong id="currentTarget">A</strong>
+        <span>当前分拣箱</span>
+      </div>
+      <div class="status-card">
+        <strong id="cycleTime">0.0s</strong>
+        <span>循环节拍</span>
+      </div>
+    </div>
+    <div class="phase-bar"><div class="phase-fill" id="phaseFill"></div></div>
+    <div class="phase-text" id="phaseText">等待来料</div>
+  </div>
+
+  <div class="legend">
+    <h2>分拣箱</h2>
+    <div class="legend-row"><span class="swatch" style="background:#ff8b8b"></span> A 箱: 易碎件</div>
+    <div class="legend-row"><span class="swatch" style="background:#73d0ff"></span> B 箱: 标准件</div>
+    <div class="legend-row"><span class="swatch" style="background:#7de2a8"></span> C 箱: 加急件</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.181.2/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    const phaseFill = document.getElementById("phaseFill");
+    const phaseText = document.getElementById("phaseText");
+    const processedCountEl = document.getElementById("processedCount");
+    const currentTargetEl = document.getElementById("currentTarget");
+    const cycleTimeEl = document.getElementById("cycleTime");
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x08111c, 28, 52);
+
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 120);
+    camera.position.set(11.5, 9.4, 16.5);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.minDistance = 10;
+    controls.maxDistance = 28;
+    controls.maxPolarAngle = Math.PI * 0.48;
+    controls.target.set(0, 2.6, 0.8);
+
+    const clock = new THREE.Clock();
+    const tempVec = new THREE.Vector3();
+    const gripWorld = new THREE.Vector3();
+
+    const ambient = new THREE.HemisphereLight(0xd7ecff, 0x1a2731, 1.8);
+    scene.add(ambient);
+
+    const sun = new THREE.DirectionalLight(0xffffff, 2.3);
+    sun.position.set(10, 18, 8);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -18;
+    sun.shadow.camera.right = 18;
+    sun.shadow.camera.top = 18;
+    sun.shadow.camera.bottom = -18;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 50;
+    scene.add(sun);
+
+    const rim = new THREE.PointLight(0x79d6ff, 18, 32, 2);
+    rim.position.set(-9, 8, -8);
+    scene.add(rim);
+
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x48525d,
+      roughness: 0.94,
+      metalness: 0.08,
+    });
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(44, 34), floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const grid = new THREE.GridHelper(42, 28, 0x6d8191, 0x32404b);
+    grid.position.y = 0.01;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.32;
+    scene.add(grid);
+
+    const backWall = new THREE.Mesh(
+      new THREE.PlaneGeometry(44, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0x1e2f42,
+        roughness: 0.95,
+        metalness: 0.05,
+      }),
+    );
+    backWall.position.set(0, 8, -12);
+    backWall.receiveShadow = true;
+    scene.add(backWall);
+
+    const sideWall = new THREE.Mesh(
+      new THREE.PlaneGeometry(26, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0x132231,
+        roughness: 0.92,
+      }),
+    );
+    sideWall.rotation.y = Math.PI / 2;
+    sideWall.position.set(-15, 8, 0);
+    scene.add(sideWall);
+
+    function createLabelSprite(text, color) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "rgba(5, 13, 22, 0.82)";
+      ctx.fillRect(8, 10, 240, 108);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(11, 13, 234, 102);
+      ctx.fillStyle = "#eef7ff";
+      ctx.font = "bold 52px Segoe UI";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, 128, 64);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(2.4, 1.2, 1);
+      return sprite;
+    }
+
+    function createBeltTexture() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 512;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#24303d";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#314251";
+      ctx.fillRect(0, 0, canvas.width, 20);
+      ctx.fillRect(0, 54, canvas.width, 20);
+      ctx.fillRect(0, 108, canvas.width, 20);
+      ctx.strokeStyle = "#5d7488";
+      ctx.lineWidth = 6;
+      for (let i = -40; i < canvas.width + 40; i += 72) {
+        ctx.beginPath();
+        ctx.moveTo(i, 24);
+        ctx.lineTo(i + 30, 64);
+        ctx.lineTo(i, 104);
+        ctx.stroke();
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(7, 1);
+      return texture;
+    }
+
+    function createConveyor() {
+      const group = new THREE.Group();
+      const frameMaterial = new THREE.MeshStandardMaterial({
+        color: 0x55616b,
+        roughness: 0.5,
+        metalness: 0.55,
+      });
+      const railMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8594a0,
+        roughness: 0.32,
+        metalness: 0.82,
+      });
+      const beltMap = createBeltTexture();
+      const beltMaterial = new THREE.MeshStandardMaterial({
+        color: 0x22303b,
+        roughness: 0.76,
+        metalness: 0.12,
+        map: beltMap,
+      });
+
+      const base = new THREE.Mesh(new THREE.BoxGeometry(18, 0.8, 3.2), frameMaterial);
+      base.position.y = 0.45;
+      base.castShadow = true;
+      base.receiveShadow = true;
+      group.add(base);
+
+      const belt = new THREE.Mesh(new THREE.BoxGeometry(17.3, 0.26, 2.3), beltMaterial);
+      belt.position.set(0, 1.02, 0);
+      belt.receiveShadow = true;
+      group.add(belt);
+
+      const railLeft = new THREE.Mesh(new THREE.BoxGeometry(18, 0.22, 0.18), railMaterial);
+      railLeft.position.set(0, 1.3, 1.12);
+      const railRight = railLeft.clone();
+      railRight.position.z = -1.12;
+      railLeft.castShadow = railRight.castShadow = true;
+      group.add(railLeft, railRight);
+
+      const legGeo = new THREE.BoxGeometry(0.22, 1.4, 0.22);
+      for (const x of [-7.8, -3.8, 0, 3.8, 7.8]) {
+        for (const z of [-1.15, 1.15]) {
+          const leg = new THREE.Mesh(legGeo, frameMaterial);
+          leg.position.set(x, -0.1, z);
+          leg.castShadow = true;
+          group.add(leg);
+        }
+      }
+
+      const rollerGeo = new THREE.CylinderGeometry(0.42, 0.42, 2.28, 24);
+      rollerGeo.rotateZ(Math.PI / 2);
+      const rollerMat = new THREE.MeshStandardMaterial({
+        color: 0x9aacb8,
+        roughness: 0.3,
+        metalness: 0.92,
+      });
+      const rollers = [];
+      for (let x = -8.2; x <= 8.2; x += 1.4) {
+        const roller = new THREE.Mesh(rollerGeo, rollerMat);
+        roller.position.set(x, 1.02, 0);
+        roller.castShadow = true;
+        group.add(roller);
+        rollers.push(roller);
+      }
+
+      group.position.set(0, 0, 4.1);
+      return { group, beltMap, rollers };
+    }
+
+    function createStorageRacks() {
+      const rackGroup = new THREE.Group();
+      const metal = new THREE.MeshStandardMaterial({
+        color: 0x647482,
+        roughness: 0.45,
+        metalness: 0.62,
+      });
+      const crateColors = [0x7d93a8, 0xb58b61, 0x8db2a5, 0x8d6fb6];
+
+      for (const baseZ of [-9.6, -7, -4.4]) {
+        const uprightGeo = new THREE.BoxGeometry(0.2, 5.4, 0.2);
+        const beamGeo = new THREE.BoxGeometry(4.4, 0.18, 0.18);
+        const shelfGeo = new THREE.BoxGeometry(4.2, 0.12, 1.4);
+
+        for (const x of [8.2, 12.2]) {
+          const upright1 = new THREE.Mesh(uprightGeo, metal);
+          upright1.position.set(x, 2.7, baseZ - 0.75);
+          const upright2 = upright1.clone();
+          upright2.position.z = baseZ + 0.75;
+          rackGroup.add(upright1, upright2);
+        }
+
+        for (const y of [1.2, 2.9, 4.6]) {
+          const beam = new THREE.Mesh(beamGeo, metal);
+          beam.position.set(10.2, y, baseZ - 0.75);
+          const beam2 = beam.clone();
+          beam2.position.z = baseZ + 0.75;
+          const shelf = new THREE.Mesh(
+            shelfGeo,
+            new THREE.MeshStandardMaterial({ color: 0x334252, roughness: 0.82, metalness: 0.12 }),
+          );
+          shelf.position.set(10.2, y - 0.12, baseZ);
+          beam.castShadow = beam2.castShadow = shelf.receiveShadow = true;
+          rackGroup.add(beam, beam2, shelf);
+        }
+
+        for (let i = 0; i < 6; i += 1) {
+          const crate = new THREE.Mesh(
+            new THREE.BoxGeometry(0.9, 0.8, 0.8),
+            new THREE.MeshStandardMaterial({
+              color: crateColors[(i + Math.round(baseZ)) & 3],
+              roughness: 0.74,
+              metalness: 0.08,
+            }),
+          );
+          crate.position.set(8.8 + (i % 3) * 1.1, 1.6 + Math.floor(i / 3) * 1.7, baseZ + (i % 2 ? 0.35 : -0.35));
+          crate.castShadow = true;
+          crate.receiveShadow = true;
+          rackGroup.add(crate);
+        }
+      }
+      scene.add(rackGroup);
+    }
+
+    const conveyor = createConveyor();
+    scene.add(conveyor.group);
+    createStorageRacks();
+
+    const binConfig = [
+      { label: "A", color: 0xff8b8b, position: new THREE.Vector3(-4.5, 0, -5.6) },
+      { label: "B", color: 0x73d0ff, position: new THREE.Vector3(0, 0, -5.9) },
+      { label: "C", color: 0x7de2a8, position: new THREE.Vector3(4.5, 0, -5.6) },
+    ];
+
+    const binStacks = [0, 0, 0];
+    const bins = [];
+
+    function createBin({ label, color, position }) {
+      const group = new THREE.Group();
+      group.position.copy(position);
+
+      const shell = new THREE.Mesh(
+        new THREE.BoxGeometry(3.1, 1.7, 3.1),
+        new THREE.MeshStandardMaterial({
+          color,
+          transparent: true,
+          opacity: 0.18,
+          roughness: 0.22,
+          metalness: 0.18,
+        }),
+      );
+      shell.position.y = 0.9;
+      shell.receiveShadow = true;
+      group.add(shell);
+
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(3.1, 1.7, 3.1)),
+        new THREE.LineBasicMaterial({ color }),
+      );
+      edges.position.copy(shell.position);
+      group.add(edges);
+
+      const base = new THREE.Mesh(
+        new THREE.BoxGeometry(3.2, 0.26, 3.2),
+        new THREE.MeshStandardMaterial({ color: 0x41505e, roughness: 0.86, metalness: 0.12 }),
+      );
+      base.position.y = 0.14;
+      base.receiveShadow = true;
+      group.add(base);
+
+      const labelSprite = createLabelSprite(label, `#${color.toString(16).padStart(6, "0")}`);
+      labelSprite.position.set(0, 2.4, 0);
+      group.add(labelSprite);
+
+      scene.add(group);
+      return group;
+    }
+
+    for (const item of binConfig) {
+      bins.push(createBin(item));
+    }
+
+    function createRobotArm() {
+      const root = new THREE.Group();
+      const metalMain = new THREE.MeshStandardMaterial({
+        color: 0xdde7f2,
+        roughness: 0.24,
+        metalness: 0.86,
+      });
+      const metalDark = new THREE.MeshStandardMaterial({
+        color: 0x32414d,
+        roughness: 0.62,
+        metalness: 0.38,
+      });
+      const accent = new THREE.MeshStandardMaterial({
+        color: 0xffb340,
+        roughness: 0.38,
+        metalness: 0.22,
+        emissive: 0x402200,
+      });
+
+      const basePedestal = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.55, 1.2, 40), metalDark);
+      basePedestal.position.y = 0.6;
+      basePedestal.castShadow = true;
+      basePedestal.receiveShadow = true;
+      root.add(basePedestal);
+
+      const turret = new THREE.Group();
+      turret.position.y = 1.18;
+      root.add(turret);
+
+      const turretBody = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.12, 0.84, 40), metalMain);
+      turretBody.castShadow = true;
+      turretBody.receiveShadow = true;
+      turret.add(turretBody);
+
+      const shoulderPivot = new THREE.Group();
+      shoulderPivot.position.y = 0.32;
+      turret.add(shoulderPivot);
+
+      const shoulderHousing = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.1, 1.3), accent);
+      shoulderHousing.castShadow = true;
+      shoulderHousing.receiveShadow = true;
+      shoulderPivot.add(shoulderHousing);
+
+      const upperLength = 4.2;
+      const upperArm = new THREE.Mesh(new THREE.BoxGeometry(upperLength, 0.56, 0.78), metalMain);
+      upperArm.position.x = upperLength / 2;
+      upperArm.castShadow = true;
+      upperArm.receiveShadow = true;
+      shoulderPivot.add(upperArm);
+
+      const elbowPivot = new THREE.Group();
+      elbowPivot.position.x = upperLength;
+      shoulderPivot.add(elbowPivot);
+
+      const elbowJoint = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.48, 0.94, 32), accent);
+      elbowJoint.rotation.z = Math.PI / 2;
+      elbowJoint.castShadow = true;
+      elbowJoint.receiveShadow = true;
+      elbowPivot.add(elbowJoint);
+
+      const foreLength = 3.2;
+      const foreArm = new THREE.Mesh(new THREE.BoxGeometry(foreLength, 0.42, 0.62), metalMain);
+      foreArm.position.x = foreLength / 2;
+      foreArm.castShadow = true;
+      foreArm.receiveShadow = true;
+      elbowPivot.add(foreArm);
+
+      const wristPivot = new THREE.Group();
+      wristPivot.position.x = foreLength;
+      elbowPivot.add(wristPivot);
+
+      const wristJoint = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.8, 24), accent);
+      wristJoint.rotation.z = Math.PI / 2;
+      wristJoint.castShadow = true;
+      wristPivot.add(wristJoint);
+
+      const palm = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.22, 0.62), metalDark);
+      palm.position.x = 0.42;
+      palm.castShadow = true;
+      wristPivot.add(palm);
+
+      const fingerLeft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.72, 0.16), metalMain);
+      const fingerRight = fingerLeft.clone();
+      fingerLeft.position.set(0.82, 0.28, 0.18);
+      fingerRight.position.set(0.82, -0.28, 0.18);
+      fingerLeft.castShadow = fingerRight.castShadow = true;
+      wristPivot.add(fingerLeft, fingerRight);
+
+      const gripPoint = new THREE.Object3D();
+      gripPoint.position.set(0.96, 0, 0.18);
+      wristPivot.add(gripPoint);
+
+      root.position.set(0, 0, 0);
+
+      scene.add(root);
+
+      return {
+        root,
+        turret,
+        shoulderPivot,
+        elbowPivot,
+        wristPivot,
+        fingerLeft,
+        fingerRight,
+        gripPoint,
+        upperLength,
+        foreLength,
+        baseHeight: 1.5,
+      };
+    }
+
+    const robot = createRobotArm();
+
+    function createParcel(color, label) {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95, 0.72, 0.72),
+        new THREE.MeshStandardMaterial({
+          color,
+          roughness: 0.62,
+          metalness: 0.12,
+        }),
+      );
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(1.02, 0.16, 0.18),
+        new THREE.MeshStandardMaterial({ color: 0xf3f4f6, roughness: 0.66, metalness: 0.05 }),
+      );
+      band.position.y = 0.08;
+      group.add(band);
+
+      const sticker = createLabelSprite(label, "#ffffff");
+      sticker.scale.set(0.65, 0.34, 1);
+      sticker.position.set(0, 0.12, 0.38);
+      group.add(sticker);
+
+      return group;
+    }
+
+    const parcelStyles = [
+      { bin: 0, color: 0xff8b8b, label: "FRAGILE" },
+      { bin: 1, color: 0x73d0ff, label: "STD" },
+      { bin: 2, color: 0x7de2a8, label: "PRIORITY" },
+    ];
+
+    const activeParcel = createParcel(parcelStyles[0].color, parcelStyles[0].label);
+    scene.add(activeParcel);
+
+    const parcelStartX = -8.4;
+    const parcelTrackZ = 4.1;
+    const parcelBaseY = 1.52;
+    const parcelPickOffsetY = 0.24;
+    const pickHoverLift = 2.09;
+    const pickHover = new THREE.Vector3();
+    const pickPoint = new THREE.Vector3();
+    const transitLift = new THREE.Vector3(1.2, 5.35, 2.1);
+    const homePoint = new THREE.Vector3(3.2, 4.6, 2.4);
+    const binHover = [
+      new THREE.Vector3(-4.5, 4.25, -5.5),
+      new THREE.Vector3(0, 4.25, -5.9),
+      new THREE.Vector3(4.5, 4.25, -5.5),
+    ];
+    const binDrop = [
+      new THREE.Vector3(-4.5, 2.05, -5.5),
+      new THREE.Vector3(0, 2.05, -5.9),
+      new THREE.Vector3(4.5, 2.05, -5.5),
+    ];
+
+    const cycleDuration = 12.5;
+    let cycleIndex = 0;
+    let processedCount = 0;
+    let activeProfile = parcelStyles[0];
+    let parcelAttached = false;
+    let dropCommitted = false;
+
+    function easeInOut(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function mixVec(out, a, b, t) {
+      out.copy(a).lerp(b, t);
+      return out;
+    }
+
+    function clamp01(v) {
+      return Math.min(1, Math.max(0, v));
+    }
+
+    function remap(time, start, end) {
+      return clamp01((time - start) / (end - start));
+    }
+
+    function syncPickTargets() {
+      pickPoint.set(
+        activeParcel.position.x,
+        activeParcel.position.y + parcelPickOffsetY,
+        activeParcel.position.z,
+      );
+      pickHover.set(
+        activeParcel.position.x,
+        pickPoint.y + pickHoverLift,
+        activeParcel.position.z,
+      );
+    }
+
+    function setParcelOnConveyor(x) {
+      activeParcel.position.set(x, parcelBaseY, parcelTrackZ);
+      syncPickTargets();
+    }
+
+    function buildIkCandidate(radial, height, elbowAngle) {
+      const shoulderOffset = Math.atan2(
+        robot.foreLength * Math.sin(Math.abs(elbowAngle)),
+        robot.upperLength + robot.foreLength * Math.cos(Math.abs(elbowAngle)),
+      );
+      const shoulderBase = Math.atan2(height, radial);
+      const shoulder = elbowAngle >= 0
+        ? shoulderBase - shoulderOffset
+        : shoulderBase + shoulderOffset;
+      const elbowY = robot.baseHeight + robot.upperLength * Math.sin(shoulder);
+      const wrist = -(shoulder + elbowAngle) * 0.92;
+      return { shoulder, elbow: elbowAngle, wrist, elbowY };
+    }
+
+    function computeArmIK(target) {
+      const dx = target.x;
+      const dz = target.z;
+      const radial = Math.max(0.15, Math.hypot(dx, dz));
+      const height = target.y - robot.baseHeight;
+      const maxReach = robot.upperLength + robot.foreLength - 0.2;
+      const minReach = Math.abs(robot.upperLength - robot.foreLength) + 0.2;
+      const rawDist = Math.hypot(radial, height);
+      const dist = THREE.MathUtils.clamp(rawDist, minReach, maxReach);
+
+      const cosElbow = THREE.MathUtils.clamp(
+        (dist * dist - robot.upperLength * robot.upperLength - robot.foreLength * robot.foreLength) /
+          (2 * robot.upperLength * robot.foreLength),
+        -1,
+        1,
+      );
+      const elbowMagnitude = Math.acos(cosElbow);
+      // The arm geometry points down +X in local space. In Three.js, positive Y rotation
+      // turns +X toward -Z, so the world-space target yaw must be negated.
+      const yaw = -Math.atan2(dz, dx);
+      const safeElbowY = dz > 2.4 ? 2.55 : 1.9;
+
+      const elbowDown = buildIkCandidate(radial, height, elbowMagnitude);
+      const elbowUp = buildIkCandidate(radial, height, -elbowMagnitude);
+
+      let pose = elbowUp;
+      if (elbowUp.elbowY < safeElbowY && elbowDown.elbowY >= safeElbowY) {
+        pose = elbowDown;
+      } else if (elbowDown.elbowY >= safeElbowY && elbowUp.elbowY >= safeElbowY) {
+        pose = elbowUp.elbowY >= elbowDown.elbowY ? elbowUp : elbowDown;
+      } else if (elbowDown.elbowY > elbowUp.elbowY) {
+        pose = elbowDown;
+      }
+
+      return {
+        yaw,
+        shoulder: pose.shoulder,
+        elbow: pose.elbow,
+        wrist: pose.wrist,
+      };
+    }
+
+    function applyArmPose(target, gripOpen) {
+      const pose = computeArmIK(target);
+      robot.turret.rotation.y = pose.yaw;
+      robot.shoulderPivot.rotation.z = pose.shoulder;
+      robot.elbowPivot.rotation.z = pose.elbow;
+      robot.wristPivot.rotation.z = pose.wrist;
+
+      const fingerGap = THREE.MathUtils.lerp(0.08, 0.32, gripOpen);
+      robot.fingerLeft.position.y = fingerGap;
+      robot.fingerRight.position.y = -fingerGap;
+    }
+
+    function setParcelProfile(profile) {
+      activeProfile = profile;
+      currentTargetEl.textContent = binConfig[profile.bin].label;
+      activeParcel.children[0].material.color.setHex(profile.color);
+    }
+
+    function resetParcel() {
+      const profile = parcelStyles[cycleIndex % parcelStyles.length];
+      setParcelProfile(profile);
+      parcelAttached = false;
+      dropCommitted = false;
+      activeParcel.visible = true;
+      activeParcel.position.set(parcelStartX, parcelBaseY, parcelTrackZ);
+      activeParcel.rotation.set(0, 0, 0);
+      syncPickTargets();
+    }
+
+    function placeDroppedParcel() {
+      const binIndex = activeProfile.bin;
+      const stackLevel = binStacks[binIndex];
+      binStacks[binIndex] += 1;
+
+      const dropped = createParcel(activeProfile.color, activeProfile.label);
+      const xOffset = ((stackLevel % 2) - 0.5) * 0.78;
+      const zOffset = (Math.floor(stackLevel / 2) % 2 === 0 ? -0.42 : 0.42);
+      dropped.scale.setScalar(0.88);
+      dropped.position.set(
+        binConfig[binIndex].position.x + xOffset,
+        0.75 + Math.floor(stackLevel / 4) * 0.75,
+        binConfig[binIndex].position.z + zOffset,
+      );
+      dropped.rotation.y = (stackLevel % 2 === 0 ? 1 : -1) * 0.18;
+      scene.add(dropped);
+    }
+
+    resetParcel();
+    applyArmPose(homePoint, 1);
+
+    const poseTarget = new THREE.Vector3();
+
+    function updateSimulation(elapsed) {
+      const cycleTime = elapsed % cycleDuration;
+      const progress = cycleTime / cycleDuration;
+      const targetBin = activeProfile.bin;
+      const phaseName = [];
+
+      cycleTimeEl.textContent = `${cycleTime.toFixed(1)}s`;
+      phaseFill.style.width = `${(progress * 100).toFixed(1)}%`;
+
+      let gripOpen = 1;
+      let carryTarget = homePoint;
+
+      syncPickTargets();
+
+      if (cycleTime < 4.4) {
+        const t = easeInOut(remap(cycleTime, 0, 4.4));
+        setParcelOnConveyor(THREE.MathUtils.lerp(parcelStartX, 0, t));
+        activeParcel.rotation.y = Math.sin(elapsed * 4) * 0.03;
+        carryTarget = homePoint;
+        phaseName.push("来料输送");
+      } else if (cycleTime < 5.3) {
+        setParcelOnConveyor(0);
+        mixVec(poseTarget, homePoint, pickHover, easeInOut(remap(cycleTime, 4.4, 5.3)));
+        carryTarget = poseTarget;
+        phaseName.push("机械臂预对位");
+      } else if (cycleTime < 6.1) {
+        setParcelOnConveyor(0);
+        mixVec(poseTarget, pickHover, pickPoint, easeInOut(remap(cycleTime, 5.3, 6.1)));
+        carryTarget = poseTarget;
+        phaseName.push("下探抓取");
+      } else if (cycleTime < 6.7) {
+        setParcelOnConveyor(0);
+        carryTarget = pickPoint;
+        gripOpen = 1 - easeInOut(remap(cycleTime, 6.1, 6.7));
+        phaseName.push("夹爪闭合");
+      } else if (cycleTime < 7.9) {
+        mixVec(poseTarget, pickPoint, transitLift, easeInOut(remap(cycleTime, 6.7, 7.9)));
+        carryTarget = poseTarget;
+        gripOpen = 0.04;
+        phaseName.push("提升离带");
+      } else if (cycleTime < 9.1) {
+        mixVec(poseTarget, transitLift, binHover[targetBin], easeInOut(remap(cycleTime, 7.9, 9.1)));
+        carryTarget = poseTarget;
+        gripOpen = 0.04;
+        phaseName.push("转运到箱位");
+      } else if (cycleTime < 9.9) {
+        mixVec(poseTarget, binHover[targetBin], binDrop[targetBin], easeInOut(remap(cycleTime, 9.1, 9.9)));
+        carryTarget = poseTarget;
+        gripOpen = 0.04;
+        phaseName.push("下放包裹");
+      } else if (cycleTime < 10.5) {
+        carryTarget = binDrop[targetBin];
+        gripOpen = easeInOut(remap(cycleTime, 9.9, 10.5));
+        phaseName.push("释放分拣");
+      } else if (cycleTime < 11.4) {
+        mixVec(poseTarget, binDrop[targetBin], transitLift, easeInOut(remap(cycleTime, 10.5, 11.4)));
+        carryTarget = poseTarget;
+        gripOpen = 1;
+        phaseName.push("抬升撤离");
+      } else {
+        mixVec(poseTarget, transitLift, homePoint, easeInOut(remap(cycleTime, 11.4, cycleDuration)));
+        carryTarget = poseTarget;
+        gripOpen = 1;
+        phaseName.push("回到待机位");
+      }
+
+      applyArmPose(carryTarget, gripOpen);
+
+      const shouldAttach = cycleTime >= 6.45 && cycleTime < 10.0;
+      if (shouldAttach) {
+        parcelAttached = true;
+      }
+
+      if (parcelAttached) {
+        robot.gripPoint.getWorldPosition(gripWorld);
+        activeParcel.position.copy(gripWorld);
+        activeParcel.rotation.set(robot.wristPivot.rotation.x, robot.wristPivot.rotation.y, robot.wristPivot.rotation.z);
+        activeParcel.rotation.y += robot.turret.rotation.y;
+      }
+
+      if (cycleTime >= 10.05 && !dropCommitted) {
+        dropCommitted = true;
+        parcelAttached = false;
+        activeParcel.visible = false;
+        placeDroppedParcel();
+        processedCount += 1;
+        processedCountEl.textContent = `${processedCount}`;
+      }
+
+      if (cycleTime < 0.12 && dropCommitted) {
+        cycleIndex += 1;
+        resetParcel();
+      }
+
+      phaseText.textContent = `${phaseName[0]} · 目标 ${binConfig[targetBin].label} 箱`;
+    }
+
+    function animate() {
+      const elapsed = clock.getElapsedTime();
+
+      conveyor.beltMap.offset.x = -(elapsed * 1.65) % 1;
+      for (let i = 0; i < conveyor.rollers.length; i += 1) {
+        conveyor.rollers[i].rotation.x = elapsed * 4.8 + i * 0.08;
+      }
+
+      updateSimulation(elapsed);
+
+      const drift = elapsed * 0.08;
+      camera.position.x += Math.sin(drift) * 0.002;
+      camera.position.z += Math.cos(drift) * 0.002;
+
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
